@@ -1,0 +1,6 @@
+{
+  "name": "Avantis Futures Engine",
+  "description": "نظام تحليل تداول ذكي متكامل يعمل كمحلل مالي ومحترف حقيقي — دمج التحليل الفني المتقدم، كشف مناطق الحيتان والتلاعب، تحليل المشاعر والأخبار، وقاعدة ذاكرة للتعلم والتطوير بدقة 85%+",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
