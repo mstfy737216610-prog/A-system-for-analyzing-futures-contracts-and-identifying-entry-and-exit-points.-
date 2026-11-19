@@ -83,25 +83,25 @@ export const BinanceConnectModal: React.FC<BinanceConnectModalProps> = ({
 
         {/* Header */}
         <div className="flex items-center gap-3 border-b border-white/5 pb-4">
-          <div className="p-2.5 bg-[#f59e0b]/10 text-[#f59e0b] rounded-sm border border-[#f59e0b]/20">
-            <Key className="w-5 h-5" />
+          <div className="p-2.5 bg-emerald-500/10 text-emerald-400 rounded-sm border border-emerald-500/20">
+            <ShieldCheck className="w-5 h-5" />
           </div>
           <div>
             <h3 className="text-base font-bold text-white tracking-tight">
-              إعدادات ربط Binance API & الحساب الحقيقي
+              الوضع الآمن بدون مفاتيح بايننس (اختياري تماماً)
             </h3>
-            <p className="text-xs text-white/40 mt-0.5">
-              ربط مباشر بقراءة بيانات محفظة العقود الآجلة (USDT-M Futures)
+            <p className="text-xs text-emerald-300/80 mt-0.5">
+              النظام يعمل 100% بدون الحاجة لأي مفتاح Binance الخاص عبر بيانات العقود المفتوحة (Binance / Bybit / OKX / Gate)
             </p>
           </div>
         </div>
 
         {/* Security Assurance Notice */}
-        <div className="p-4 bg-blue-500/5 border border-blue-500/20 rounded-sm flex items-start gap-3">
-          <ShieldCheck className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
-          <p className="text-xs text-white/70 leading-relaxed">
-            <strong className="text-white block mb-0.5">ضمان الأمان والخصوصية:</strong>
-            يرجى إنشاء مفتاح API بصلاحية <strong>قراءة فقط (Read Only)</strong> وتفعيل <strong>Enable Futures</strong> دون أي صلاحيات سحب (Withdrawal). يتم حفظ المفاتيح محلياً على متصفحك فقط.
+        <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-sm flex items-start gap-3">
+          <ShieldCheck className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
+          <p className="text-xs text-white/80 leading-relaxed">
+            <strong className="text-emerald-300 block mb-0.5">لا تحتاج إلى إدخال مفتاح Binance نهائياً:</strong>
+            جميع شاشات التحليل، مسح الـ 745+ عملة، ومقارنة الأسعار عبر المنصات تعطي إشارات وتنبيهات دخول دقيقة دون لمس محفظتك. الحقول بالأسفل اختيارية فقط إذا أردت عرض رصيدك (Read-Only).
           </p>
         </div>
 

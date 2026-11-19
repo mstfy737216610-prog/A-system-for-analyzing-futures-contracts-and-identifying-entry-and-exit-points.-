@@ -1,0 +1,20 @@
+{
+  "symbol": "BTCUSDT",
+  "totalSignals": 0,
+  "wins": 0,
+  "losses": 0,
+  "winRate": 0,
+  "avgPnlPct": 0,
+  "bestTimeframe": "15m",
+  "knownSupportZones": [
+    62030.8
+  ],
+  "knownResistanceZones": [
+    64934.7,
+    65679.2
+  ],
+  "detectedTrapsCount": 0,
+  "learnedRules": [],
+  "recentTrades": [],
+  "lastUpdated": 1795053431434
+}

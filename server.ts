@@ -7,10 +7,14 @@ import axios from "axios";
 import crypto from "crypto";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import fs from "fs";
 import { analyzeData, detectWashTradingAndManipulation, evaluateMultiTimeframeTrend, MultiTimeframeAudit, analyzeMicroTimeframes, MicroTimeframeAudit, analyzePreTrendOfTheDay, PreTrendOfTheDayAudit } from "./server/indicators.ts";
 import { evaluateComprehensiveMarketMatrix } from "./server/marketMatrix.ts";
 import { freqtradeEngine, BUILTIN_STRATEGIES } from "./server/freqtrade_engine.ts";
 import { cryptoSignalEngine } from "./server/crypto_signal_engine.ts";
+import { storageMemory } from "./server/storage_memory_engine.ts";
+import { aiHub } from "./server/ai_hub.ts";
+import { cyberQuantEngine } from "./server/cyber_quant_engine.ts";
 import {
   evaluateMarketRegime,
   evaluateOrderFlow,
@@ -2874,168 +2878,193 @@ async function startServer() {
         // Fallback to default
       }
 
-      // 2. Fetch Live RSS from Cointelegraph
-      let rawArticles: Array<{ title: string; pubDate: string; link: string; description: string }> = [];
-      try {
-        const rssRes = await axios.get("https://cointelegraph.com/rss", { 
-          timeout: 4000,
-          headers: { "User-Agent": "Mozilla/5.0 (compatible; AvantisEngine/2.0)" }
-        });
-        const xmlData = rssRes.data as string;
+      // 2. Fetch Live Multi-Source News (Cointelegraph + CoinDesk + Federal Reserve + CryptoCompare)
+      let rawArticles: Array<{ title: string; pubDate: string; link: string; description: string; source: string }> = [];
+      const extractRssItems = (xmlData: string, sourceName: string, limit = 5) => {
+        const items: typeof rawArticles = [];
         const itemRegex = /<item>([\s\S]*?)<\/item>/g;
         let match;
-        while ((match = itemRegex.exec(xmlData)) !== null && rawArticles.length < 8) {
+        while ((match = itemRegex.exec(xmlData)) !== null && items.length < limit) {
           const itemContent = match[1];
           const title = (itemContent.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || itemContent.match(/<title>(.*?)<\/title>/))?.[1] || '';
           const pubDate = itemContent.match(/<pubDate>(.*?)<\/pubDate>/)?.[1] || '';
           let link = itemContent.match(/<link><!\[CDATA\[(.*?)\]\]><\/link>/)?.[1] || itemContent.match(/<link>(.*?)<\/link>/)?.[1] || '';
           link = link.replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1');
           const description = (itemContent.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/) || itemContent.match(/<description>(.*?)<\/description>/))?.[1] || '';
-          if (title) {
-            rawArticles.push({ 
-              title: title.trim(), 
-              pubDate: pubDate ? new Date(pubDate).toLocaleTimeString("ar-SA", { hour: '2-digit', minute: '2-digit' }) : "منذ قليل", 
-              link: link.trim(), 
-              description: description.replace(/<[^>]*>?/gm, '').slice(0, 140) 
+          if (title && !title.toLowerCase().includes("cointelegraph.com")) {
+            items.push({
+              title: title.replace(/<[^>]*>?/gm, '').trim(),
+              pubDate: pubDate ? new Date(pubDate).toLocaleTimeString("ar-SA", { hour: '2-digit', minute: '2-digit' }) : "مباشر",
+              link: link.trim() || "https://www.coindesk.com",
+              description: description.replace(/<[^>]*>?/gm, '').slice(0, 160),
+              source: sourceName
             });
           }
         }
-      } catch (err) {
-        console.warn("Direct RSS fetch error:", err);
+        return items;
+      };
+
+      const [ctRes, cdRes, fedRes, ccRes] = await Promise.allSettled([
+        axios.get("https://cointelegraph.com/rss", { timeout: 3500, headers: { "User-Agent": "Mozilla/5.0" } }),
+        axios.get("https://www.coindesk.com/arc/outboundfeeds/rss/", { timeout: 3500, headers: { "User-Agent": "Mozilla/5.0" } }),
+        axios.get("https://www.federalreserve.gov/feeds/press_monetary.xml", { timeout: 3500, headers: { "User-Agent": "Mozilla/5.0" } }),
+        axios.get("https://min-api.cryptocompare.com/data/v2/news/?lang=EN", { timeout: 3500 })
+      ]);
+
+      if (fedRes.status === "fulfilled" && typeof fedRes.value.data === "string") {
+        rawArticles.push(...extractRssItems(fedRes.value.data, "Federal Reserve (الفيدرالي الأمريكي)", 3));
+      }
+      if (cdRes.status === "fulfilled" && typeof cdRes.value.data === "string") {
+        rawArticles.push(...extractRssItems(cdRes.value.data, "CoinDesk", 3));
+      }
+      if (ctRes.status === "fulfilled" && typeof ctRes.value.data === "string") {
+        rawArticles.push(...extractRssItems(ctRes.value.data, "Cointelegraph", 3));
+      }
+      if (ccRes.status === "fulfilled" && Array.isArray(ccRes.value.data?.Data)) {
+        for (const item of ccRes.value.data.Data.slice(0, 3)) {
+          if (item.title && !rawArticles.some(a => a.title === item.title)) {
+            rawArticles.push({
+              title: String(item.title).trim(),
+              pubDate: item.published_on ? new Date(item.published_on * 1000).toLocaleTimeString("ar-SA", { hour: '2-digit', minute: '2-digit' }) : "منذ قليل",
+              link: item.url || "https://www.cryptocompare.com",
+              description: String(item.body || "").slice(0, 150),
+              source: item.source_info?.name || "CryptoCompare / Social Pulse"
+            });
+          }
+        }
       }
 
-      // 3. Synthesize with Gemini for Human-Grade Institutional Translation & Sentiment
+      rawArticles = rawArticles.slice(0, 10);
+
+      // 3. Synthesize via Multi-Site AI Hub (Agnes AI / Custom Sites) with Deterministic Non-AI Fallback
       let processedNews: any[] = [];
-      if (rawArticles.length > 0 && process.env.GEMINI_API_KEY) {
-        try {
-          const titlesText = rawArticles.map((a, i) => `${i + 1}. ${a.title}`).join("\n");
-          const prompt = `أنت المحلل الإخباري المؤسساتي لأسواق الكريبتو وصناديق التحوط.
-حلل هذه العناوين الإخبارية الحية الصادرة اليوم وقدم تحليلاً لكل خبر بالعربية بتنسيق JSON حصراً:
-${titlesText}
-
-المطلوب إخراج مصفوفة JSON تحتوي على كائنات لكل خبر بالترتيب:
-[
-  {
-    "index": number,
-    "titleArabic": "ترجمة احترافية ومباشرة للعنوان بالعربية",
-    "summaryArabic": "شرح استراتيجي في جملة واحدة عن أهمية الخبر وحركة السيولة",
-    "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-    "sentimentScore": number (من -100 إلى +100، مثال: +85 إيجابي جداً، -70 سلبي حاد، 0 محايد),
-    "sentimentTone": "POSITIVE" | "NEGATIVE" | "NEUTRAL",
-    "impact": "HIGH" | "MEDIUM" | "LOW",
-    "affectedSymbols": ["BTC", "ETH", ...],
-    "institutionalTakeaway": "ماذا تفعل الحيتان والمؤسسات حيال هذا الخبر (بالعربية)"
-  }
-]`;
-
-          const aiResp = await callGeminiDirect(prompt, "أنت محلل إخباري استراتيجي للعملات الرقمية.");
-          const parsedAi = safeParseJSON(aiResp || "");
-          if (Array.isArray(parsedAi) && parsedAi.length > 0) {
-            processedNews = rawArticles.map((art, idx) => {
-              const aiItem = parsedAi.find((p: any) => p.index === (idx + 1)) || parsedAi[idx] || {};
-              const rawScore = typeof aiItem.sentimentScore === "number" ? Math.max(-100, Math.min(100, aiItem.sentimentScore)) : (aiItem.sentiment === "BULLISH" ? 75 : aiItem.sentiment === "BEARISH" ? -75 : 0);
-              const tone = aiItem.sentimentTone || (rawScore > 15 ? "POSITIVE" : rawScore < -15 ? "NEGATIVE" : "NEUTRAL");
-
-              return {
-                id: `news-${idx}-${Date.now()}`,
-                title: art.title,
-                titleArabic: aiItem.titleArabic || art.title,
-                summaryArabic: aiItem.summaryArabic || art.description || "تحديث فوري من حركة الأسواق العالمية.",
-                source: "Cointelegraph / Market Intelligence",
-                pubDate: art.pubDate,
-                url: art.link,
-                sentiment: aiItem.sentiment || (rawScore > 15 ? "BULLISH" : rawScore < -15 ? "BEARISH" : "NEUTRAL"),
-                sentimentScore: rawScore,
-                sentimentTone: tone,
-                impact: aiItem.impact || "MEDIUM",
-                affectedSymbols: Array.isArray(aiItem.affectedSymbols) ? aiItem.affectedSymbols : ["BTC", "USDT"],
-                institutionalTakeaway: aiItem.institutionalTakeaway || "مراقبة تدفقات السيولة وإعادة التمركز عند مناطق الدعم."
-              };
-            });
-          }
-        } catch (e) {
-          // fallback to heuristic below
-        }
-      }
-
-      // Fallback heuristics if Gemini or RSS was unavailable
-      if (processedNews.length === 0) {
-        const fallbackNews = rawArticles.length > 0 ? rawArticles : [
+      const buildHeuristicNews = (articles: typeof rawArticles) => {
+        const list = articles.length > 0 ? articles : [
           {
-            title: "Bitcoin institutional ETF net inflows surge as macro uncertainty eases",
+            title: "Federal Reserve policy and liquidity conditions guide crypto futures risk appetite",
+            pubDate: "مباشر",
+            link: "https://www.federalreserve.gov",
+            description: "مراقبة قرارات السيولة وأسعار الفائدة للفيدرالي الأمريكي وتأثيرها على تدفقات البيتكوين والعملات البديلة.",
+            source: "Federal Reserve (الفيدرالي الأمريكي)"
+          },
+          {
+            title: "Bitcoin and AI Sector futures see sharp institutional inflow across major exchanges",
             pubDate: "منذ 15 دقيقة",
-            link: "https://cointelegraph.com",
-            description: "صناديق البيتكوين الفورية تسجل دخول سيولة قوية تدعم بقاء الأسعار فوق مناطق الدعم الرئيسية."
-          },
-          {
-            title: "Federal Reserve policy signals point to steady liquidity conditions",
-            pubDate: "منذ 32 دقيقة",
-            link: "https://cointelegraph.com",
-            description: "توقعات تثبيت الفائدة تمنح العملات البديلة مساحة لاقتناص موجات صعود ارتدادية."
-          },
-          {
-            title: "Whale addresses accumulate large volume of ETH and SOL on spot order books",
-            pubDate: "منذ 45 دقيقة",
-            link: "https://cointelegraph.com",
-            description: "بيانات السلسلة تكشف عن سحب كميات ضخمة من المنصات نحو محافظ تجميع باردة."
+            link: "https://www.coindesk.com",
+            description: "ارتفاع السيولة الشرائية في عقود البيتكوين وقطاع الذكاء الاصطناعي TAO و FET و RENDER.",
+            source: "CoinDesk / Futures Pulse"
           }
         ];
 
-        processedNews = fallbackNews.map((n, i) => {
-          const tLower = n.title.toLowerCase();
-          const dLower = (n.description || "").toLowerCase();
-          const fullText = `${tLower} ${dLower}`;
-          
-          const isBull = fullText.includes("inflow") || fullText.includes("accumulat") || fullText.includes("surge") || 
-                         fullText.includes("rally") || fullText.includes("gain") || fullText.includes("high") || 
-                         fullText.includes("bull") || fullText.includes("buy") || fullText.includes("growth") ||
-                         fullText.includes("breakout") || fullText.includes("record") || fullText.includes("approval");
+        return list.map((n, i) => {
+          const fullText = `${n.title} ${n.description} ${n.source}`.toLowerCase();
+          const isFed = fullText.includes("federal reserve") || fullText.includes("fomc") || fullText.includes("rate") || fullText.includes("inflation") || fullText.includes("cpi");
+          const isBull = fullText.includes("inflow") || fullText.includes("accumulat") || fullText.includes("surge") ||
+                         fullText.includes("rally") || fullText.includes("gain") || fullText.includes("bull") ||
+                         fullText.includes("buy") || fullText.includes("breakout") || fullText.includes("approval") ||
+                         fullText.includes("cut") || fullText.includes("liquidity");
+          const isBear = fullText.includes("drop") || fullText.includes("crash") || fullText.includes("ban") ||
+                         fullText.includes("fall") || fullText.includes("dump") || fullText.includes("liquidat") ||
+                         fullText.includes("hack") || fullText.includes("plunge") || fullText.includes("bear") ||
+                         fullText.includes("lawsuit") || fullText.includes("fear") || fullText.includes("hike");
 
-          const isBear = fullText.includes("drop") || fullText.includes("crash") || fullText.includes("ban") || 
-                         fullText.includes("fall") || fullText.includes("dump") || fullText.includes("liquidat") || 
-                         fullText.includes("hack") || fullText.includes("scam") || fullText.includes("plunge") ||
-                         fullText.includes("bear") || fullText.includes("lawsuit") || fullText.includes("fear") ||
-                         fullText.includes("loss");
-
-          const score = isBull && !isBear ? 82 : isBear && !isBull ? -78 : isBull && isBear ? 25 : 5;
+          const score = isBull && !isBear ? 78 : isBear && !isBull ? -74 : isFed ? 10 : 5;
           const detectedSentiment: "BULLISH" | "BEARISH" | "NEUTRAL" = score > 15 ? "BULLISH" : score < -15 ? "BEARISH" : "NEUTRAL";
           const detectedTone: "POSITIVE" | "NEGATIVE" | "NEUTRAL" = score > 15 ? "POSITIVE" : score < -15 ? "NEGATIVE" : "NEUTRAL";
 
-          // Detect affected symbols from title
           const symbolsFound: string[] = [];
-          if (fullText.includes("btc") || fullText.includes("bitcoin") || fullText.includes("بيتكوين")) symbolsFound.push("BTC");
-          if (fullText.includes("eth") || fullText.includes("ethereum") || fullText.includes("ether") || fullText.includes("إيثيريوم")) symbolsFound.push("ETH");
-          if (fullText.includes("sol") || fullText.includes("solana") || fullText.includes("سولانا")) symbolsFound.push("SOL");
-          if (fullText.includes("bnb") || fullText.includes("binance") || fullText.includes("بينانس")) symbolsFound.push("BNB");
-          if (fullText.includes("xrp") || fullText.includes("ripple") || fullText.includes("ريبل")) symbolsFound.push("XRP");
-          if (fullText.includes("doge") || fullText.includes("dogecoin")) symbolsFound.push("DOGE");
-          if (symbolsFound.length === 0) symbolsFound.push("BTC", "USDT");
+          if (fullText.includes("btc") || fullText.includes("bitcoin")) symbolsFound.push("BTC");
+          if (fullText.includes("eth") || fullText.includes("ethereum")) symbolsFound.push("ETH");
+          if (fullText.includes("sol") || fullText.includes("solana")) symbolsFound.push("SOL");
+          if (fullText.includes("xrp") || fullText.includes("ripple")) symbolsFound.push("XRP");
+          if (fullText.includes("ai") || fullText.includes("tao") || fullText.includes("fet")) symbolsFound.push("TAO", "FET");
+          if (isFed || symbolsFound.length === 0) symbolsFound.push("BTC", "XAUUSDT");
 
           return {
             id: `news-${i}-${Date.now()}`,
             title: n.title,
-            titleArabic: i === 0 ? "تدفقات مؤسساتية قياسية لصناديق الـ ETF تدعم استقرار البيتكوين" : i === 1 ? "إشارات السياسة النقدية للفيدرالي تدعم استقرار السيولة" : "حيتان الكريبتو تواصل تجميع الإيثيريوم والعملات القيادية",
-            summaryArabic: n.description,
-            source: "Cointelegraph / Fast Terminal",
+            titleArabic: isFed ? `🏛️ [الفيدرالي] ${n.title}` : n.title,
+            summaryArabic: n.description || "تحديث مباشر من تغذية الأسواق العالمية والفيدرالي الأمريكي.",
+            source: n.source,
             pubDate: n.pubDate,
             url: n.link,
             sentiment: detectedSentiment,
             sentimentScore: score,
             sentimentTone: detectedTone,
-            impact: Math.abs(score) > 50 ? "HIGH" : "MEDIUM",
-            affectedSymbols: symbolsFound,
-            institutionalTakeaway: detectedSentiment === "BULLISH" 
-              ? "صناديق التحوط تستغل الإيجابية لبناء مراكز تمركز صاعدة وامتصاص أي عروض بيع."
-              : detectedSentiment === "BEARISH" 
-                ? "الحيتان تقلص المخاطر وتضع جدران سيولة دفاعية عند القيعان السابقة."
-                : "توازن نسبي بين قوى العرض والطلب بانتظار إغلاقات يومية حاسمة."
+            impact: isFed || Math.abs(score) > 50 ? "HIGH" : "MEDIUM",
+            affectedSymbols: Array.from(new Set(symbolsFound)),
+            institutionalTakeaway: isFed
+              ? "حدث ماكرو/فيدرالي عالي الحساسية: تجنب الرافعة العالية وقت صدور البيان وانتظر ارتداد السيولة على فريم 15m."
+              : detectedSentiment === "BULLISH"
+                ? "إشارة إيجابية تدعم استمرار الشراء المؤسساتي عند الدعوم."
+                : detectedSentiment === "BEARISH"
+                  ? "ضغط سلبي يتطلب الحذر من ذيول ضرب الستوبات ويفضل الانتظار أو البيع مع تأكيد الحجم."
+                  : "تأثير متوازن يعتمد على تأكيد كسر الدعوم والمقاومات في العقود الآجلة."
           };
         });
+      };
+
+      const aiMode = aiHub.getConfig().mode;
+      if (rawArticles.length > 0 && aiMode !== "NO_AI") {
+        try {
+          const titlesText = rawArticles.map((a, i) => `${i + 1}. [${a.source}] ${a.title}`).join("\n");
+          const prompt = `حلل هذه العناوين الإخبارية الحية (تشمل الفيدرالي الأمريكي وCoinDesk وCointelegraph) وأعد مصفوفة JSON صالحة بالعربية فقط:
+${titlesText}
+
+الشكل المطلوب:
+[
+  {
+    "index": number,
+    "titleArabic": "عنوان عربي احترافي دقيق",
+    "summaryArabic": "ملخص في جملة واحدة يوضح الأثر على السيولة والتذبذب",
+    "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+    "sentimentScore": number (-100 to 100),
+    "impact": "HIGH" | "MEDIUM" | "LOW",
+    "affectedSymbols": ["BTC", "ETH"],
+    "institutionalTakeaway": "نصيحة تنفيذية قصيرة لمتداول العقود الآجلة"
+  }
+]`;
+          const hubRes = await aiHub.invokeRole(
+            "news",
+            "أنت محلل أخبار الفيدرالي والكريبتو (CoinDesk / Fed / Telegram / X). أعد JSON صالحاً فقط.",
+            prompt,
+            () => ""
+          );
+          const parsedAi = hubRes.usedAi ? safeParseJSON(hubRes.text || "") : null;
+          if (Array.isArray(parsedAi) && parsedAi.length > 0) {
+            processedNews = rawArticles.map((art, idx) => {
+              const aiItem = parsedAi.find((p: any) => p.index === idx + 1) || parsedAi[idx] || {};
+              const rawScore = typeof aiItem.sentimentScore === "number"
+                ? Math.max(-100, Math.min(100, aiItem.sentimentScore))
+                : (aiItem.sentiment === "BULLISH" ? 75 : aiItem.sentiment === "BEARISH" ? -75 : 0);
+              return {
+                id: `news-${idx}-${Date.now()}`,
+                title: art.title,
+                titleArabic: aiItem.titleArabic || art.title,
+                summaryArabic: aiItem.summaryArabic || art.description || "تحديث مباشر من الأسواق.",
+                source: `${art.source} (${hubRes.model})`,
+                pubDate: art.pubDate,
+                url: art.link,
+                sentiment: aiItem.sentiment || (rawScore > 15 ? "BULLISH" : rawScore < -15 ? "BEARISH" : "NEUTRAL"),
+                sentimentScore: rawScore,
+                sentimentTone: rawScore > 15 ? "POSITIVE" : rawScore < -15 ? "NEGATIVE" : "NEUTRAL",
+                impact: aiItem.impact || (art.source.includes("Federal") ? "HIGH" : "MEDIUM"),
+                affectedSymbols: Array.isArray(aiItem.affectedSymbols) ? aiItem.affectedSymbols : ["BTC", "USDT"],
+                institutionalTakeaway: aiItem.institutionalTakeaway || "راقب إغلاق شمعة 15m وتدفق الشراء قبل الدخول."
+              };
+            });
+          }
+        } catch {}
+      }
+
+      if (processedNews.length === 0) {
+        processedNews = buildHeuristicNews(rawArticles);
       }
 
       const responsePayload = {
         news: processedNews,
         fearAndGreed,
+        aiModeUsed: aiMode,
         lastUpdated: Date.now()
       };
 
@@ -3844,6 +3873,183 @@ ${titlesText}
       console.error("[CryptoSignal Analyze Coin Error]:", err);
       res.status(500).json({ error: err.message || "فشل التحليل الفني للعملة" });
     }
+  });
+
+  // =========================================================================
+  // 🧠 MULTI-SITE AI HUB (Parallel 5-Role Council + Dynamic Key/Site Manager)
+  // =========================================================================
+  app.get("/api/ai-hub/config", (req, res) => {
+    res.json({
+      success: true,
+      config: aiHub.getMaskedConfig(),
+      storage: storageMemory.getStorageStatus()
+    });
+  });
+
+  app.post("/api/ai-hub/config", (req, res) => {
+    try {
+      const updated = aiHub.updateConfig(req.body || {});
+      res.json({
+        success: true,
+        message: "تم حفظ الإعدادات ومزامنتها فوراً مع ذاكرة التخزين ومجلد التنزيلات.",
+        config: aiHub.getMaskedConfig(),
+        updatedAt: updated.updatedAt
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "فشل حفظ إعدادات الذكاء الاصطناعي" });
+    }
+  });
+
+  app.post("/api/ai-hub/test-provider", async (req, res) => {
+    try {
+      const { baseUrl, apiKey, model } = req.body || {};
+      if (!baseUrl || !apiKey) {
+        return res.status(400).json({ success: false, error: "يرجى إدخال رابط الموقع (Base URL) ومفتاح API" });
+      }
+      const result = await aiHub.testProvider(baseUrl, apiKey, model);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // =========================================================================
+  // 🛡️ CYBER-QUANT & MULTI-SCREEN ENGINE (Works WITH or WITHOUT AI)
+  // =========================================================================
+  app.get("/api/cyber-quant/pulse", async (req, res) => {
+    try {
+      const force = req.query.force === "true";
+      const pulse = await cyberQuantEngine.getCrossMarketPulse(force);
+      res.json({ success: true, pulse, timestamp: Date.now() });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "فشل قراءة نبض الأسواق" });
+    }
+  });
+
+  app.get("/api/cyber-quant/scan-market", async (req, res) => {
+    try {
+      const capitalUsd = Number(req.query.capitalUsd) || 50;
+      const tf = (req.query.timeframe as "5m" | "15m" | "1h" | "4h") || "15m";
+      const result = await cyberQuantEngine.scanFullMarketOpportunities(capitalUsd, tf);
+      res.json({ success: true, ...result });
+    } catch (err: any) {
+      console.error("[CyberQuant Scan Error]:", err);
+      res.status(500).json({ error: err.message || "فشل مسح السوق الكامل" });
+    }
+  });
+
+  app.post("/api/cyber-quant/deep-analyze", async (req, res) => {
+    try {
+      const { symbol = "BTCUSDT", capitalUsd = 50, screenshots = [], includeAi = true } = req.body || {};
+      const report = await cyberQuantEngine.runFullDeepAnalysis({
+        symbol,
+        capitalUsd: Number(capitalUsd) || 50,
+        screenshots: Array.isArray(screenshots) ? screenshots : [],
+        includeAi: Boolean(includeAi)
+      });
+      res.json({ success: true, report });
+    } catch (err: any) {
+      console.error("[CyberQuant Deep Analyze Error]:", err);
+      res.status(500).json({ error: err.message || "فشل التحليل العميق للعملة" });
+    }
+  });
+
+  // =========================================================================
+  // 💾 TERMUX DOWNLOADS SYNC, PER-COIN LEARNING MEMORY & CHECKPOINT RESUME
+  // =========================================================================
+  app.get("/api/storage/status", (req, res) => {
+    res.json({
+      success: true,
+      status: storageMemory.getStorageStatus(),
+      checkpoint: storageMemory.loadCheckpoint(),
+      journalCount: storageMemory.loadJournal().length
+    });
+  });
+
+  app.post("/api/storage/sync-dir", (req, res) => {
+    const { syncDir } = req.body || {};
+    if (!syncDir) return res.status(400).json({ success: false, error: "يرجى كتابة مسار المجلد" });
+    const result = storageMemory.setSyncDirectory(syncDir);
+    res.json(result);
+  });
+
+  app.get("/api/storage/checkpoint", (req, res) => {
+    res.json({ success: true, checkpoint: storageMemory.loadCheckpoint() });
+  });
+
+  app.post("/api/storage/checkpoint", (req, res) => {
+    const checkpoint = storageMemory.saveCheckpoint(req.body || {});
+    res.json({ success: true, checkpoint });
+  });
+
+  app.get("/api/storage/coins", (req, res) => {
+    res.json({
+      success: true,
+      coins: storageMemory.listAllCoinProfiles(),
+      journal: storageMemory.loadJournal().slice(0, 60)
+    });
+  });
+
+  app.post("/api/storage/record-lesson", async (req, res) => {
+    try {
+      const lessonInput = req.body || {};
+      const lesson = {
+        id: lessonInput.id || `lesson-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        symbol: String(lessonInput.symbol || "BTCUSDT").toUpperCase(),
+        timeframe: String(lessonInput.timeframe || "15m"),
+        direction: (lessonInput.direction === "SHORT" ? "SHORT" : "LONG") as "LONG" | "SHORT",
+        entry: Number(lessonInput.entry || 0),
+        exit: lessonInput.exit ? Number(lessonInput.exit) : undefined,
+        sl: Number(lessonInput.sl || 0),
+        tp1: Number(lessonInput.tp1 || 0),
+        tp2: Number(lessonInput.tp2 || 0),
+        outcome: (["OPEN", "WIN", "LOSS", "BREAKEVEN"].includes(lessonInput.outcome) ? lessonInput.outcome : "OPEN") as any,
+        pnlPercent: Number(lessonInput.pnlPercent || 0),
+        entryReason: String(lessonInput.entryReason || "دخول متوافق عبر الفريمات والسيولة"),
+        timestamp: lessonInput.timestamp || Date.now(),
+        closedAt: lessonInput.outcome !== "OPEN" ? Date.now() : undefined
+      };
+
+      let aiPostMortem = lessonInput.aiPostMortem;
+      if (!aiPostMortem && (lesson.outcome === "WIN" || lesson.outcome === "LOSS")) {
+        aiPostMortem = await aiHub.analyzeClosedTradeLesson(lesson);
+      }
+
+      const profile = storageMemory.recordCoinTradeLesson({
+        ...lesson,
+        aiPostMortem,
+        learnedRule: aiPostMortem ? aiPostMortem.split("\n")[0].slice(0, 220) : undefined
+      });
+
+      res.json({ success: true, profile, aiPostMortem });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "فشل حفظ سجل التعلم" });
+    }
+  });
+
+  app.get("/api/storage/export-bundle", (req, res) => {
+    const bundle = storageMemory.exportFullSyncBundle();
+    res.setHeader("Content-Disposition", `attachment; filename="avantis_memory_sync_${Date.now()}.json"`);
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.send(JSON.stringify(bundle, null, 2));
+  });
+
+  // Serve Termux & How-it-works documentation files
+  app.get("/api/docs/files", (req, res) => {
+    const readSafe = (fname: string) => {
+      try {
+        const p = path.join(process.cwd(), fname);
+        return fs.existsSync(p) ? fs.readFileSync(p, "utf-8") : "";
+      } catch {
+        return "";
+      }
+    };
+    res.json({
+      success: true,
+      termuxInstall: readSafe("طريقة_التثبيت_من_ترميكس.md"),
+      howItWorks: readSafe("شرح_العمل_والتطوير.md"),
+      termuxScript: readSafe("termux_setup.sh")
+    });
   });
 
   // API 404 Handler

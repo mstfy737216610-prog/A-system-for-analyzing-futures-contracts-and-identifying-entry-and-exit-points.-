@@ -1,0 +1,29 @@
+{
+  "activeTab": "multiscreen",
+  "selectedSymbol": "BTCUSDT",
+  "activeTimeframe": "15m",
+  "huntingMode": "SMART_FAST",
+  "botState": "RUNNING",
+  "capitalUsd": 50,
+  "lastScanCursor": 0,
+  "lastScannedSymbols": [
+    "MARSCOINUSDT",
+    "CAPUSDT",
+    "RAREUSDT",
+    "MMTUSDT",
+    "IDOLUSDT",
+    "PANWUSDT",
+    "BEAMXUSDT"
+  ],
+  "activeWatchlist": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "TAOUSDT",
+    "FETUSDT",
+    "NEARUSDT",
+    "SUIUSDT",
+    "XAUUSDT"
+  ],
+  "savedAt": 1795053448520
+}

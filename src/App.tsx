@@ -8,7 +8,7 @@ import {
   ExternalLink, MousePointer2, LayoutDashboard, Shield, Maximize2,
   Newspaper, Crosshair, AlertCircle, TrendingDown, Info, Volume2, VolumeX, Star,
   Calendar, Copy, Check, Radar, Key, ShieldCheck, Network, Columns, Split, ArrowRightLeft, CheckCircle2,
-  Award, ArrowUpDown, Flame, Bell, RefreshCw, Bot
+  Award, ArrowUpDown, Flame, Bell, RefreshCw, Bot, FolderSync, Monitor
 } from "lucide-react";
 import { TradingViewChart, ChartHandle } from "./components/TradingViewChart";
 import LiquidityMap from "./components/LiquidityMap";
@@ -25,6 +25,8 @@ import InstitutionalSignalCard from "./components/InstitutionalSignalCard";
 import { FreqtradeDashboard } from "./components/FreqtradeDashboard";
 import { SniperBotAlertsCenter } from "./components/SniperBotAlertsCenter";
 import { CryptoSignalDashboard } from "./components/CryptoSignalDashboard";
+import { MultiScreenQuantCockpit } from "./components/MultiScreenQuantCockpit";
+import { TermuxAndDocsHub } from "./components/TermuxAndDocsHub";
 import { MarketSignal, KlineData, TimeFrame, MacroData, OrderBookData, EconomicEvent, BinanceAccountInfo, RejectedAuditItem } from "./types";
 import { 
   evaluateHistoricalBacktest, 
@@ -37,7 +39,7 @@ import { initialSignals } from "./defaultSignals";
 import { evaluateSignalStrength, SignalTier } from "./sniperStrengthEngine";
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"dashboard" | "freqtrade" | "crypto_signals" | "council" | "terminal" | "macro" | "sniper" | "whale" | "memory" | "news" | "ai_terminal" | "correlation" | "bottom_scanner">("freqtrade");
+  const [activeTab, setActiveTab] = useState<"multiscreen" | "termux_docs" | "dashboard" | "freqtrade" | "crypto_signals" | "council" | "terminal" | "macro" | "sniper" | "whale" | "memory" | "news" | "ai_terminal" | "correlation" | "bottom_scanner">("multiscreen");
   const [sniperToolView, setSniperToolView] = useState<'ALL_IN_ONE' | 'BOT_ALERTS' | 'MULTI_TF_MATRIX' | 'ELITE_CARDS'>('ALL_IN_ONE');
   const [bottomResults, setBottomResults] = useState<any[]>([]);
   const [bottomFilterTab, setBottomFilterTab] = useState<'ALL' | 'ABSOLUTE' | 'CRASH' | 'EXPLODING' | 'WAKING_UP' | 'SQUEEZE' | 'RETEST'>('ALL');
@@ -102,6 +104,42 @@ export default function App() {
   const [alertSensitivity, setAlertSensitivity] = useState<number>(92); // Increased from 88 for extreme precision
   const chartRef = useRef<ChartHandle>(null);
   const lastAlertMapRef = useRef<Map<string, number>>(new Map());
+  const checkpointLoadedRef = useRef(false);
+
+  // Restore last saved session state (Checkpoint Resume from Termux Downloads)
+  useEffect(() => {
+    fetch("/api/storage/checkpoint")
+      .then((r) => r.json())
+      .then((data) => {
+        const cp = data?.checkpoint;
+        if (cp) {
+          if (cp.selectedSymbol) setSelectedSymbol(cp.selectedSymbol);
+          if (cp.activeTimeframe) setTimeframe(cp.activeTimeframe as TimeFrame);
+          if (cp.activeTab) setActiveTab(cp.activeTab as any);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        checkpointLoadedRef.current = true;
+      });
+  }, []);
+
+  // Auto-save checkpoint whenever activeTab, selectedSymbol, or timeframe changes
+  useEffect(() => {
+    if (!checkpointLoadedRef.current) return;
+    const timer = setTimeout(() => {
+      fetch("/api/storage/checkpoint", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          activeTab,
+          selectedSymbol,
+          activeTimeframe: timeframe
+        })
+      }).catch(() => {});
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [activeTab, selectedSymbol, timeframe]);
 
   // Verified signals list: Strictly sorted by Level & Strength by default (ترتيب إلزامي من الأقوى للأضعف)
   const activeVerifiedSignals = useMemo(() => {
@@ -1708,6 +1746,7 @@ export default function App() {
         <div className="flex-1 overflow-y-auto py-4">
           <nav className="px-3 space-y-1">
             {( [
+              { id: 'multiscreen', label: '🖥️ غرفة الشاشات الـ4 + القناص الكمي', icon: Monitor },
               { id: 'freqtrade', label: '⚡ بوت Freqtrade للعقود الآجلة', icon: Bot },
               { id: 'crypto_signals', label: '📊 مصفوفة الفريمات (Crypto-Signal)', icon: Activity },
               { id: 'sniper', label: '🎯 قناص الفرص الفنية والتنبيهات', icon: Crosshair },
@@ -1719,6 +1758,7 @@ export default function App() {
               { id: 'memory', label: 'ذاكرة الصفقات والتعلم', icon: Brain },
               { id: 'news', label: 'رادار الأخبار والسيولة', icon: Newspaper },
               { id: 'macro', label: 'أخبار الفيدرالي والماكرو', icon: Globe },
+              { id: 'termux_docs', label: '📱 Termux + ذاكرة التنزيلات والشرح', icon: FolderSync },
               { id: 'council', label: 'التقرير الاستراتيجي', icon: ShieldAlert },
               { id: 'terminal', label: 'سجلات النظام', icon: Terminal },
             ] as const).map((item) => (
@@ -1880,27 +1920,27 @@ export default function App() {
         <div className="p-4 border-t border-white/5 space-y-2">
           <button
             onClick={() => setIsBinanceModalOpen(true)}
-            className="w-full flex items-center justify-between p-2.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-sm text-amber-300 transition-all text-xs group"
+            className="w-full flex items-center justify-between p-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-sm text-emerald-300 transition-all text-xs group"
           >
             <div className="flex items-center gap-2">
-              <Key className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition-transform" />
-              <span className="font-bold">ربط حساب Binance</span>
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 group-hover:scale-110 transition-transform" />
+              <span className="font-bold">وضع آمن بدون مفتاح 🔓</span>
             </div>
-            <span className="text-[9px] bg-amber-500/20 text-amber-200 px-1.5 py-0.5 rounded font-mono">
-              {binanceAccount?.connected ? "متصل 🟢" : "إعداد ⚙️"}
+            <span className="text-[9px] bg-emerald-500/20 text-emerald-200 px-1.5 py-0.5 rounded font-mono">
+              {binanceAccount?.connected ? "محفظة متصلة 🟢" : "بيانات مفتوحة"}
             </span>
           </button>
 
           <button
             onClick={() => setIsAiConfigModalOpen(true)}
-            className="w-full flex items-center justify-between p-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-sm text-emerald-300 transition-all text-xs group"
+            className="w-full flex items-center justify-between p-2.5 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 rounded-sm text-cyan-300 transition-all text-xs group"
           >
             <div className="flex items-center gap-2">
-              <Cpu className="w-3.5 h-3.5 text-emerald-400 group-hover:scale-110 transition-transform" />
-              <span className="font-bold">محرك AI (4 نماذج متخصصة)</span>
+              <Cpu className="w-3.5 h-3.5 text-cyan-400 group-hover:scale-110 transition-transform" />
+              <span className="font-bold">مواقع ومفاتيح AI (5 أدوار)</span>
             </div>
-            <span className="text-[9px] bg-emerald-500/25 text-emerald-200 px-1.5 py-0.5 rounded font-mono font-bold">
-              مربوط تلقائياً 🟢
+            <span className="text-[9px] bg-cyan-500/25 text-cyan-200 px-1.5 py-0.5 rounded font-mono font-bold">
+              Agnes + مخصص 🟢
             </span>
           </button>
           <div className="flex items-center justify-between">
@@ -2007,6 +2047,20 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {/* Quick Multi-Screen Cyber-Quant Button */}
+            <button
+              onClick={() => setActiveTab('multiscreen')}
+              className={`flex items-center gap-1.5 px-3 h-9 rounded-sm text-xs font-bold transition-all border ${
+                activeTab === 'multiscreen'
+                  ? 'bg-cyan-400 text-black border-cyan-300 shadow-md shadow-cyan-400/20 font-black'
+                  : 'bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
+              }`}
+              title="غرفة الشاشات الـ4 والمقارنة السيبرانية وقناص الـ745 عملة"
+            >
+              <Monitor className="w-3.5 h-3.5" />
+              <span>4 شاشات + قناص 🖥️</span>
+            </button>
+
             {/* Quick Freqtrade Hub Button in Header */}
             <button
               onClick={() => setActiveTab('freqtrade')}
@@ -2049,6 +2103,20 @@ export default function App() {
               <span>قناص الفرص 🎯</span>
             </button>
 
+            {/* Quick Termux & Downloads Sync Button */}
+            <button
+              onClick={() => setActiveTab('termux_docs')}
+              className={`flex items-center gap-1.5 px-3 h-9 rounded-sm text-xs font-bold transition-all border ${
+                activeTab === 'termux_docs'
+                  ? 'bg-purple-400 text-black border-purple-300 font-black'
+                  : 'bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border-purple-500/30'
+              }`}
+              title="دليل التثبيت من Termux ومزامنة الذاكرة مع مجلد التنزيلات"
+            >
+              <FolderSync className="w-3.5 h-3.5" />
+              <span className="hidden xl:inline">Termux والتنزيلات 💾</span>
+            </button>
+
             {/* Quick Dual Chart Toggle in Header */}
             <button
               onClick={() => setIsDualChart(!isDualChart)}
@@ -2065,23 +2133,23 @@ export default function App() {
 
             <button
               onClick={() => setIsAiConfigModalOpen(true)}
-              className="flex items-center gap-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-3 h-9 rounded-sm text-xs font-mono transition-all"
-              title="جميع النماذج مربوطة وتعمل تلقائياً (MiniMax + DeepSeek + Kimi + Step)"
+              className="flex items-center gap-2 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-3 h-9 rounded-sm text-xs font-mono transition-all"
+              title="إدارة مواقع ومفاتيح الذكاء الاصطناعي وتوزيع النماذج الـ5"
             >
-              <Cpu className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden lg:inline font-bold">AI: 4 نماذج 🟢</span>
+              <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="hidden lg:inline font-bold">مفاتيح AI (5 نماذج) 🟢</span>
             </button>
 
             <button
               onClick={() => setIsBinanceModalOpen(true)}
-              className="flex items-center gap-2 bg-[#f59e0b]/10 hover:bg-[#f59e0b]/20 text-[#f59e0b] border border-[#f59e0b]/30 px-3 h-9 rounded-sm text-xs font-mono transition-all"
-              title="إعدادات وربط Binance API"
+              className="flex items-center gap-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-3 h-9 rounded-sm text-xs font-mono transition-all"
+              title="النظام يعمل بدون مفتاح Binance الخاص — اضغط للعرض الاختياري"
             >
-              <Key className="w-3.5 h-3.5 text-[#f59e0b]" />
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
               <span className="hidden lg:inline">
                 {binanceAccount?.connected 
                   ? `$${binanceAccount.walletBalanceUsdt !== undefined ? binanceAccount.walletBalanceUsdt : 0} USDT` 
-                  : "Binance API"}
+                  : "بدون مفتاح 🔓"}
               </span>
             </button>
 
@@ -2111,6 +2179,46 @@ export default function App() {
 
         <div className="flex-1 flex flex-col overflow-hidden">
           <AnimatePresence mode="wait">
+            {activeTab === 'multiscreen' && (
+              <motion.div
+                key="multiscreen"
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                className="flex-1 p-5 sm:p-6 overflow-y-auto"
+              >
+                <MultiScreenQuantCockpit
+                  selectedSymbol={selectedSymbol}
+                  allSymbols={allSymbols}
+                  onSelectSymbol={(sym) => setSelectedSymbol(sym)}
+                  onOpenAiModal={() => setIsAiConfigModalOpen(true)}
+                  onOpenNews={() => setActiveTab('news')}
+                  onOpenTermuxDocs={() => setActiveTab('termux_docs')}
+                />
+              </motion.div>
+            )}
+
+            {activeTab === 'termux_docs' && (
+              <motion.div
+                key="termux_docs"
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                className="flex-1 p-5 sm:p-6 overflow-y-auto"
+              >
+                <TermuxAndDocsHub
+                  currentSymbol={selectedSymbol}
+                  currentTimeframe={timeframe}
+                  currentTab={activeTab}
+                  onSelectSymbol={(sym) => {
+                    setSelectedSymbol(sym);
+                    setActiveTab('multiscreen');
+                  }}
+                  onRestoreCheckpoint={(cp) => {
+                    if (cp.selectedSymbol) setSelectedSymbol(cp.selectedSymbol);
+                    if (cp.activeTimeframe) setTimeframe(cp.activeTimeframe as TimeFrame);
+                    if (cp.activeTab) setActiveTab(cp.activeTab);
+                  }}
+                />
+              </motion.div>
+            )}
+
             {activeTab === 'freqtrade' && (
               <motion.div 
                 key="freqtrade"
