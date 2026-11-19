@@ -4046,8 +4046,8 @@ ${titlesText}
     };
     res.json({
       success: true,
-      termuxInstall: readSafe("طريقة_التثبيت_من_ترميكس.md"),
-      howItWorks: readSafe("شرح_العمل_والتطوير.md"),
+      termuxInstall: readSafe("TERMUX_INSTALL_GUIDE.md"),
+      howItWorks: readSafe("SYSTEM_ARCHITECTURE_GUIDE.md"),
       termuxScript: readSafe("termux_setup.sh")
     });
   });
